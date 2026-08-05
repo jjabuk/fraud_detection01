@@ -65,6 +65,20 @@ Expected minimum output:
 
 - `fraud-detection-504617`
 
+3. Environment-aware IAM profile for service account is configured in [service_account.tf](service_account.tf):
+
+- `dev` profile:
+	- project roles: `roles/bigquery.jobUser`, `roles/run.invoker`
+	- dataset roles: editor on `raw`, `features`, `prediction_logs`
+- `prod` profile:
+	- project roles: `roles/bigquery.jobUser`, `roles/run.invoker`
+	- dataset roles: viewer on `raw`, editor on `features`, `prediction_logs`
+
+4. Example environment variable sets are in:
+
+- [environments/dev.tfvars](environments/dev.tfvars)
+- [environments/prod.tfvars](environments/prod.tfvars)
+
 ## Reinitialize backend after changes
 
 After any backend change, run in this folder:
@@ -77,6 +91,13 @@ Optional plan check:
 
 ```bash
 tofu plan
+```
+
+Environment-specific plan examples:
+
+```bash
+tofu plan -var-file=environments/dev.tfvars
+tofu plan -var-file=environments/prod.tfvars
 ```
 
 ## Note about ADC quota project

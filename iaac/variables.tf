@@ -10,6 +10,17 @@ variable "region" {
   default     = "europe-central2"
 }
 
+variable "environment" {
+  description = "Deployment environment controlling IAM profile"
+  type        = string
+  default     = "dev"
+
+  validation {
+    condition     = contains(["dev", "prod"], var.environment)
+    error_message = "environment must be one of: dev, prod"
+  }
+}
+
 # BigQuery dataset location is IMMUTABLE. Changing this variable after
 # the datasets hold data means recreating them, which means reloading
 # everything. Keep it equal to `region` so queries never pay
@@ -43,4 +54,10 @@ variable "labels" {
     app        = "fraud_detection01"
     managed_by = "opentofu"
   }
+}
+
+variable "service_account_id" {
+  description = "Account ID for the workload service account (without domain)"
+  type        = string
+  default     = "fraud-mlops-sa"
 }
