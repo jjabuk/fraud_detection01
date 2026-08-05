@@ -1,0 +1,4 @@
+load_from:
+  - python_module:
+      module_name: fraud_detection.definitions
+      location_name: fraud_detection

@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "dagster>=1.13.16",
+    "dagster-webserver>=1.13.16",
     "fastapi>=0.141.1",
     "google-cloud-bigquery>=3.42.3",
     "lightgbm>=4.7.0",

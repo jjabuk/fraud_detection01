@@ -1,0 +1,6 @@
+TransactionID,TransactionDT,TransactionAmt,isFraud,ProductCD
+1001,86400,59.5,0,W
+1002,86520,120.0,1,C
+1003,86700,12.9,0,R
+1004,87010,450.2,0,H
+1005,87300,230.0,1,S

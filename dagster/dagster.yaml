@@ -1,0 +1,24 @@
+telemetry:
+  enabled: false
+
+run_storage:
+  module: dagster._core.storage.runs
+  class: SqliteRunStorage
+  config:
+    base_dir: .dagster_home/history
+
+event_log_storage:
+  module: dagster._core.storage.event_log
+  class: SqliteEventLogStorage
+  config:
+    base_dir: .dagster_home/history
+
+schedule_storage:
+  module: dagster._core.storage.schedules
+  class: SqliteScheduleStorage
+  config:
+    base_dir: .dagster_home/history
+
+scheduler:
+  module: dagster._core.scheduler
+  class: DagsterDaemonScheduler

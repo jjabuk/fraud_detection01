@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments
+.venv/
+venv/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Dagster local runtime state. DAGSTER_HOME points here (see .env), kept
+# separate from dagster/ so that folder holds only tracked config
+# (dagster.yaml, workspace.yaml) with no runtime noise mixed in.
+.dagster_home/
+# Jupyter
+.ipynb_checkpoints/
+
+# Local data artifacts
+data/raw/*.zip
+
+# Terraform/OpenTofu local artifacts
+**/.terraform/
+*.tfstate
+*.tfstate.*
+
+# Local env vars (GCP credentials paths, etc.)
+.env
+
+# macOS
+.DS_Store
+
+# VS Code
+.vscode/

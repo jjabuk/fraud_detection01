@@ -7,9 +7,9 @@
 *   [x] Ustawienie GitHub Actions (podstawowy linter np. `ruff`).
 
 ### Krok 2: Data Ingestion (Dagster)
-*   [ ] Instalacja i konfiguracja lokalnego **Dagstera**.
-*   [ ] Napisanie pierwszego zasobu (Software-Defined Asset), który pobiera surowe dane CSV z GitHuba / Kaggle i ładuje je do tabeli surowej (Raw) w BigQuery.
-*   [ ] Walidacja schematu danych na wejściu.
+*   [x] Instalacja i konfiguracja lokalnego **Dagstera**.
+*   [x] Napisanie pierwszego zasobu (Software-Defined Asset), który pobiera surowe dane CSV z GitHuba / Kaggle i ładuje je do tabeli surowej (Raw) w BigQuery.
+*   [x] Walidacja schematu danych na wejściu.
 
 ### Krok 3: Feature Engineering Pipeline
 *   [ ] Napisanie zasobów Dagstera, które transformują dane z tabeli Raw.
