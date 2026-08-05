@@ -7,8 +7,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  ruff:
-    name: Ruff Lint
+  quality:
+    name: Ruff + Pytest
     runs-on: ubuntu-latest
 
     steps:
@@ -28,3 +28,12 @@ jobs:
 
       - name: Run ruff
         run: uv run ruff check .
+
+      - name: Run pytest
+        run: |
+          uv run pytest || rc=$?
+          if [ "${rc:-0}" -eq 5 ]; then
+            echo "No tests collected yet (exit code 5); treating as non-blocking for now."
+            exit 0
+          fi
+          exit "${rc:-0}"
