@@ -106,7 +106,7 @@ Aby projekt był zgodny z najlepszymi praktykami MLOps, nie zaczynaj od trenowan
 
 ### Krok 1: Fundamenty i IaC (Infrastructure as Code)
 *   [x] Inicjalizacja repozytorium GitHub (struktura katalogów: `data/`, `notebooks/`, `src/`, `infra/`, `tests/`).
-*   [ ] Konfiguracja środowiska wirtualnego (np. `uv` lub `Poetry`).
+*   [x] Konfiguracja środowiska wirtualnego (np. `uv` lub `Poetry`).
 *   [ ] Napisanie skryptów **OpenTofu (Terraform)**, które tworzą zasoby w GCP: 
     *   Dataset w BigQuery.
     *   Service Account z uprawnieniami do BigQuery i Cloud Run.
