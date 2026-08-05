@@ -4,7 +4,7 @@
 *   [x] Napisanie skryptów **OpenTofu (Terraform)**, które tworzą zasoby w GCP: 
     *   Dataset w BigQuery.
     *   Service Account z uprawnieniami do BigQuery i Cloud Run.
-*   [ ] Ustawienie GitHub Actions (podstawowy linter np. `ruff`).
+*   [x] Ustawienie GitHub Actions (podstawowy linter np. `ruff`).
 
 ### Krok 2: Data Ingestion (Dagster)
 *   [ ] Instalacja i konfiguracja lokalnego **Dagstera**.
