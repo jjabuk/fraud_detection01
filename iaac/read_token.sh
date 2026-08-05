@@ -1,0 +1,1 @@
+TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null); curl -s -H "Authorization: Bearer $TOKEN" "https://serviceusage.googleapis.com/v1/projects/speculate-504217/services/bigquery.googleapis.com" | python3 -c "import sys,json; d=json.load(sys.stdin); print('bigquery.googleapis.com:', d.get('state', d.get('error',{}).get('message','?')))"
