@@ -1,226 +1,212 @@
 from __future__ import annotations
 
-import os
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from google.cloud import bigquery
+from google.cloud import bigquery, storage
 
-from dagster import (
-    AssetCheckResult,
-    Failure,
-    Field,
-    MaterializeResult,
-    asset,
-    asset_check,
-)
+from dagster import AssetExecutionContext, Failure, MaterializeResult, asset
 
-INGESTION_DEFAULTS: dict[str, Any] = {
-    "source": "local",
-    "local_csv_path": "data/raw/train_transaction_sample.csv",
-    "kaggle_csv_path": "data/raw/train_transaction.csv",
-    "github_csv_url": "",
-    "gcp_project_id": os.getenv("GCP_PROJECT_ID", "fraud-detection-504617"),
-    "bq_dataset": os.getenv("BQ_RAW_DATASET", "raw"),
-    "bq_table": os.getenv("BQ_RAW_TABLE", "ieee_train_transaction_raw"),
-    "write_disposition": "WRITE_TRUNCATE",
-    "sample_n_rows": 0,
-    "required_columns": ["TransactionID", "TransactionDT", "TransactionAmt"],
-    "fraud_label_column": "isFraud",
-}
+from fraud_detection.resources import BigQueryResource, RawCsvSourceResource
 
-INGESTION_CONFIG_SCHEMA = {
-    "source": Field(
-        str,
-        default_value=INGESTION_DEFAULTS["source"],
-        is_required=False,
-        description="Data source: local, kaggle, or github.",
-    ),
-    "local_csv_path": Field(
-        str,
-        default_value=INGESTION_DEFAULTS["local_csv_path"],
-        is_required=False,
-    ),
-    "kaggle_csv_path": Field(
-        str,
-        default_value=INGESTION_DEFAULTS["kaggle_csv_path"],
-        is_required=False,
-    ),
-    "github_csv_url": Field(
-        str,
-        default_value=INGESTION_DEFAULTS["github_csv_url"],
-        is_required=False,
-    ),
-    "gcp_project_id": Field(
-        str,
-        default_value=INGESTION_DEFAULTS["gcp_project_id"],
-        is_required=False,
-    ),
-    "bq_dataset": Field(
-        str,
-        default_value=INGESTION_DEFAULTS["bq_dataset"],
-        is_required=False,
-    ),
-    "bq_table": Field(
-        str,
-        default_value=INGESTION_DEFAULTS["bq_table"],
-        is_required=False,
-    ),
-    "write_disposition": Field(
-        str,
-        default_value=INGESTION_DEFAULTS["write_disposition"],
-        is_required=False,
-        description="BigQuery write mode: WRITE_TRUNCATE or WRITE_APPEND.",
-    ),
-    "sample_n_rows": Field(
-        int,
-        default_value=INGESTION_DEFAULTS["sample_n_rows"],
-        is_required=False,
-        description="Optional row cap for local tests. Use 0 for all rows.",
-    ),
-    "required_columns": Field(
-        [str],
-        default_value=INGESTION_DEFAULTS["required_columns"],
-        is_required=False,
-    ),
-    "fraud_label_column": Field(
-        str,
-        default_value=INGESTION_DEFAULTS["fraud_label_column"],
-        is_required=False,
-    ),
-}
+REQUIRED_COLUMNS = ["TransactionID", "TransactionDT", "TransactionAmt"]
+FRAUD_LABEL_COLUMN = "isFraud"
+VALIDATION_CHUNK_SIZE = 100_000
+
+# Generated once via the schema-regeneration runbook in README.md (bq load
+# --autodetect into a throwaway sandbox table, hand-audit the columns
+# autodetect gets wrong, commit the result). Only consulted for the gs://
+# (production) load path -- see raw_transactions_bigquery below.
+BQ_SCHEMA_PATH = Path(__file__).parent.parent / "schemas" / "train_transaction_bq_schema.json"
+
+RAW_TABLE = "ieee_train_transaction_raw"
+INGESTION_RUNS_TABLE = "ingestion_runs"
+INGESTION_RUNS_SCHEMA = [
+    bigquery.SchemaField("dagster_run_id", "STRING"),
+    bigquery.SchemaField("source_uri", "STRING"),
+    bigquery.SchemaField("loaded_at", "TIMESTAMP"),
+    bigquery.SchemaField("num_rows", "INT64"),
+    bigquery.SchemaField("write_disposition", "STRING"),
+]
 
 
-def _resolve_config(runtime_config: dict[str, Any] | None) -> dict[str, Any]:
-    cfg = dict(INGESTION_DEFAULTS)
-    if runtime_config:
-        cfg.update(runtime_config)
-    return cfg
+def _open_source(uri: str):
+    """Returns a context-manager-compatible, file-like object for `uri`.
+
+    Deliberately uses google-cloud-storage's Blob.open() for gs:// URIs
+    instead of handing the URI string straight to pandas, which would
+    require pulling in the fsspec/gcsfs ecosystem just for this one call
+    site. Works uniformly with `with _open_source(uri) as f: ...` for
+    both local paths and gs:// URIs.
+    """
+    if uri.startswith("gs://"):
+        bucket_name, _, blob_path = uri.removeprefix("gs://").partition("/")
+        return storage.Client().bucket(bucket_name).blob(blob_path).open("rb")
+    return Path(uri).open("rb")
 
 
-def _read_source_csv(config: dict[str, Any]) -> pd.DataFrame:
-    source = config["source"]
-    if source == "local":
-        source_path = Path(config["local_csv_path"])
+@asset(group_name="ingestion")
+def raw_transactions_validation(
+    context: AssetExecutionContext,
+    raw_csv_source: RawCsvSourceResource,
+) -> MaterializeResult:
+    """Validates the raw CSV before anything gets loaded to BigQuery.
+
+    Streams only REQUIRED_COLUMNS + the fraud label across the FULL file
+    (all rows, ~5 columns) rather than reading every one of the source
+    file's ~394 columns -- bounded to tens of MB regardless of file size,
+    and a real full-file guarantee rather than a sampled one before the
+    downstream WRITE_TRUNCATE load fires.
+    """
+    cols = [*REQUIRED_COLUMNS, FRAUD_LABEL_COLUMN]
+    total_rows = 0
+    missing: set[str] = set(cols)
+    bad_label_values: set[Any] = set()
+
+    with _open_source(raw_csv_source.uri) as source_file:
+        reader = pd.read_csv(
+            source_file,
+            usecols=lambda c: c in cols,
+            chunksize=VALIDATION_CHUNK_SIZE,
+        )
+        for chunk in reader:
+            missing -= set(chunk.columns)
+            total_rows += len(chunk)
+            if FRAUD_LABEL_COLUMN in chunk.columns:
+                bad_label_values |= set(chunk[FRAUD_LABEL_COLUMN].dropna().unique()) - {0, 1}
+
+    if missing or bad_label_values:
+        raise Failure(
+            f"Schema validation failed for {raw_csv_source.uri}: "
+            f"missing_columns={sorted(missing)}, "
+            f"fraud_label_values_outside_0_1={sorted(map(str, bad_label_values))}",
+            metadata={
+                "rows_scanned": total_rows,
+                "missing_columns": sorted(missing),
+                "bad_label_values": sorted(map(str, bad_label_values)),
+            },
+        )
+
+    context.log.info(
+        "Validated %s rows from '%s': all required columns present, label domain OK.",
+        total_rows,
+        raw_csv_source.uri,
+    )
+    return MaterializeResult(
+        metadata={"rows_validated": total_rows, "source_uri": raw_csv_source.uri}
+    )
+
+
+@asset(group_name="ingestion", deps=[raw_transactions_validation])
+def raw_transactions_bigquery(
+    context: AssetExecutionContext,
+    raw_csv_source: RawCsvSourceResource,
+    bigquery_resource: BigQueryResource,
+) -> MaterializeResult:
+    """Loads the validated raw CSV into BigQuery.
+
+    Production (gs:// source) uses a server-side load_table_from_uri
+    against a pinned schema, so this process never holds the file's bytes
+    -- footprint stays flat regardless of file size. Local/dev (the
+    committed sample) loads directly with autodetect, since the sample's
+    5-column shape is a deliberate illustrative subset, not the real
+    394-column schema, so pinning wouldn't make sense there.
+
+    Depends on raw_transactions_validation by ordering only (deps=[...]),
+    not by receiving its output as an argument -- no multi-GB DataFrame
+    round-trips through Dagster's IO manager.
+    """
+    client = bigquery_resource.get_client()
+    table_id = f"{bigquery_resource.project}.raw.{RAW_TABLE}"
+
+    if raw_csv_source.is_gcs:
+        if not BQ_SCHEMA_PATH.exists():
+            raise Failure(
+                f"Pinned BigQuery schema not found at {BQ_SCHEMA_PATH}. "
+                "Generate it once via the schema-regeneration runbook in "
+                "README.md before loading from a gs:// source."
+            )
+        job_config = bigquery.LoadJobConfig(
+            source_format=bigquery.SourceFormat.CSV,
+            skip_leading_rows=1,
+            schema=client.schema_from_json(str(BQ_SCHEMA_PATH)),
+            write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+        )
+        load_job = client.load_table_from_uri(raw_csv_source.uri, table_id, job_config=job_config)
+    else:
+        source_path = Path(raw_csv_source.uri)
         if not source_path.exists():
             raise Failure(
                 f"Local CSV not found at {source_path}. "
-                "Download data from Kaggle first or change local_csv_path."
+                "Download data from Kaggle first or change raw_csv_source.uri."
             )
-        return pd.read_csv(source_path)
+        job_config = bigquery.LoadJobConfig(
+            skip_leading_rows=1,
+            autodetect=True,
+            write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+        )
+        with source_path.open("rb") as source_file:
+            load_job = client.load_table_from_file(source_file, table_id, job_config=job_config)
 
-    if source == "kaggle":
-        source_path = Path(config["kaggle_csv_path"])
-        if not source_path.exists():
-            raise Failure(
-                f"Kaggle CSV not found at {source_path}. "
-                "Expected a pre-downloaded file from Kaggle competition."
-            )
-        return pd.read_csv(source_path)
-
-    if source == "github":
-        if not config["github_csv_url"]:
-            raise Failure("github_csv_url must be provided when source='github'.")
-        return pd.read_csv(config["github_csv_url"])
-
-    raise Failure("source must be one of: local, kaggle, github.")
-
-
-def _validate_schema(df: pd.DataFrame, config: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
-    required = list(config["required_columns"])
-    missing_columns = [col for col in required if col not in df.columns]
-
-    numeric_issues: list[str] = []
-    for col in required:
-        if col in df.columns and not pd.api.types.is_numeric_dtype(df[col]):
-            numeric_issues.append(col)
-
-    label_column = config["fraud_label_column"]
-    fraud_label_issues: list[str] = []
-    if label_column in df.columns:
-        unique_values = sorted(set(df[label_column].dropna().unique().tolist()))
-        if any(v not in (0, 1) for v in unique_values):
-            fraud_label_issues.append(
-                f"{label_column} contains values outside {{0,1}}: {unique_values}"
-            )
-
-    passed = not (missing_columns or numeric_issues or fraud_label_issues)
-    metadata: dict[str, Any] = {
-        "rows": len(df),
-        "columns": len(df.columns),
-        "missing_columns": missing_columns,
-        "non_numeric_required_columns": numeric_issues,
-        "fraud_label_issues": fraud_label_issues,
-    }
-    return passed, metadata
-
-
-@asset(group_name="ingestion", config_schema=INGESTION_CONFIG_SCHEMA)
-def raw_transactions_dataframe(context) -> pd.DataFrame:
-    cfg = _resolve_config(context.op_config)
-    df = _read_source_csv(cfg)
-
-    sample_n_rows = int(cfg["sample_n_rows"])
-    if sample_n_rows > 0:
-        df = df.head(sample_n_rows)
-
-    context.log.info(
-        "Loaded raw CSV with %s rows and %s columns from source '%s'.",
-        len(df),
-        len(df.columns),
-        cfg["source"],
-    )
-    return df
-
-
-@asset_check(asset=raw_transactions_dataframe, config_schema=INGESTION_CONFIG_SCHEMA)
-def raw_transactions_schema_check(
-    context,
-    raw_transactions_dataframe: pd.DataFrame,
-) -> AssetCheckResult:
-    cfg = _resolve_config(context.op_config)
-    passed, metadata = _validate_schema(raw_transactions_dataframe, cfg)
-    return AssetCheckResult(
-        passed=passed,
-        metadata=metadata,
-        description="Validate required schema before loading raw data to BigQuery.",
-    )
-
-
-@asset(group_name="ingestion", config_schema=INGESTION_CONFIG_SCHEMA)
-def raw_transactions_bigquery(
-    context,
-    raw_transactions_dataframe: pd.DataFrame,
-) -> MaterializeResult:
-    cfg = _resolve_config(context.op_config)
-    passed, metadata = _validate_schema(raw_transactions_dataframe, cfg)
-    if not passed:
-        raise Failure("Input schema validation failed before BigQuery load.", metadata=metadata)
-
-    table_id = f"{cfg['gcp_project_id']}.{cfg['bq_dataset']}.{cfg['bq_table']}"
-    client = bigquery.Client(project=cfg["gcp_project_id"])
-
-    job_config = bigquery.LoadJobConfig(
-        write_disposition=cfg["write_disposition"],
-        autodetect=True,
-    )
-
-    load_job = client.load_table_from_dataframe(
-        raw_transactions_dataframe,
-        table_id,
-        job_config=job_config,
-    )
-    load_job.result()
-
+    load_job.result(timeout=1800)
     table = client.get_table(table_id)
-    context.log.info("Loaded %s rows into %s.", table.num_rows, table_id)
 
+    _record_ingestion_run(
+        client,
+        context=context,
+        project=bigquery_resource.project,
+        dagster_run_id=context.run_id,
+        source_uri=raw_csv_source.uri,
+        num_rows=table.num_rows,
+        write_disposition=str(job_config.write_disposition),
+    )
+
+    context.log.info("Loaded %s rows into %s.", table.num_rows, table_id)
     return MaterializeResult(
         metadata={
             "table_id": table.full_table_id,
             "rows_in_table": table.num_rows,
-            "columns_in_table": len(table.schema),
-            "write_disposition": cfg["write_disposition"],
+            "write_disposition": str(job_config.write_disposition),
         }
     )
+
+
+def _record_ingestion_run(
+    client: bigquery.Client,
+    *,
+    context: AssetExecutionContext,
+    project: str,
+    dagster_run_id: str,
+    source_uri: str,
+    num_rows: int,
+    write_disposition: str,
+) -> None:
+    """Appends one audit row per load. WRITE_TRUNCATE on the main table
+    erases *when* a load happened by design -- this table is where that
+    traceability actually lives, without touching the main table's
+    truncate-and-replace semantics.
+
+    A failure here is logged, not raised: the main table load already
+    succeeded by the time this runs, and losing one audit row shouldn't
+    fail an otherwise-successful ingestion.
+    """
+    table_id = f"{project}.raw.{INGESTION_RUNS_TABLE}"
+    client.create_table(
+        bigquery.Table(table_id, schema=INGESTION_RUNS_SCHEMA), exists_ok=True
+    )
+    errors = client.insert_rows_json(
+        table_id,
+        [
+            {
+                "dagster_run_id": dagster_run_id,
+                "source_uri": source_uri,
+                "loaded_at": datetime.now(UTC).isoformat(),
+                "num_rows": num_rows,
+                "write_disposition": write_disposition,
+            }
+        ],
+    )
+    if errors:
+        context.log.warning("Failed to write ingestion_runs audit row: %s", errors)
