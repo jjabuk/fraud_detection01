@@ -79,7 +79,7 @@ def raw_transaction_kaggle_to_gcs(
             raise Failure(f"kaggle_raw_dump.gcs_uri must be a gs:// URI, got {kaggle_raw_dump.gcs_uri!r}.")
         bucket_name, _, blob_path = kaggle_raw_dump.gcs_uri.removeprefix("gs://").partition("/")
 
-        blob = storage.Client().bucket(bucket_name).blob(blob_path)
+        blob = storage.Client(project=kaggle_raw_dump.project).bucket(bucket_name).blob(blob_path)
         blob.upload_from_filename(str(local_path))
 
     context.log.info(

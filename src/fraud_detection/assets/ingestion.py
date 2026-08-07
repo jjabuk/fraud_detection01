@@ -31,7 +31,7 @@ INGESTION_RUNS_SCHEMA = [
 ]
 
 
-def _open_source(uri: str):
+def _open_source(uri: str, project: str):
     """Returns a context-manager-compatible, file-like object for `uri`.
 
     Deliberately uses google-cloud-storage's Blob.open() for gs:// URIs
@@ -39,10 +39,15 @@ def _open_source(uri: str):
     require pulling in the fsspec/gcsfs ecosystem just for this one call
     site. Works uniformly with `with _open_source(uri) as f: ...` for
     both local paths and gs:// URIs.
+
+    `project` is passed explicitly to storage.Client() because it cannot
+    reliably be inferred from an impersonated-service-account ADC (see
+    resources.DEFAULT_GCP_PROJECT_ID) -- confirmed the hard way against a
+    real run, not a defensive guess.
     """
     if uri.startswith("gs://"):
         bucket_name, _, blob_path = uri.removeprefix("gs://").partition("/")
-        return storage.Client().bucket(bucket_name).blob(blob_path).open("rb")
+        return storage.Client(project=project).bucket(bucket_name).blob(blob_path).open("rb")
     return Path(uri).open("rb")
 
 
@@ -64,7 +69,7 @@ def raw_transactions_validation(
     missing: set[str] = set(cols)
     bad_label_values: set[Any] = set()
 
-    with _open_source(raw_csv_source.uri) as source_file:
+    with _open_source(raw_csv_source.uri, raw_csv_source.project) as source_file:
         reader = pd.read_csv(
             source_file,
             usecols=lambda c: c in cols,
