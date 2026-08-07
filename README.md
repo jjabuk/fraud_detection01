@@ -32,7 +32,7 @@ Notes:
 - You need a Kaggle account and competition access to download files.
 - Raw files are not committed to the repository.
 
-Optional download flow with Kaggle API:
+Ad hoc local copy (exploration/notebooks, not the pipeline path below):
 
 ```bash
 uv tool install kaggle
@@ -44,6 +44,44 @@ mkdir -p data/raw
 kaggle competitions download -c ieee-fraud-detection -p data/raw
 unzip data/raw/ieee-fraud-detection.zip -d data/raw
 ```
+
+### Staging the full dataset into GCS (pipeline path)
+
+The pipeline (`raw_transactions_validation` / `raw_transactions_bigquery`,
+[ingestion.py](src/fraud_detection/assets/ingestion.py)) reads from a
+`gs://` URI in production, not a local file. Getting the full
+`train_transaction.csv` from Kaggle onto GCS is its own Dagster asset,
+[raw_transaction_kaggle_to_gcs](src/fraud_detection/assets/kaggle_source.py)
+-- deliberately **not** wired as a dependency of the validate/load assets,
+since the dataset is static: materialize it by hand, rarely, whenever the
+staged file needs (re)seeding, not on every ingestion run.
+
+One-time Kaggle auth (either works; `kaggle.api.kaggle_api_extended.
+KaggleApi.authenticate()` checks both):
+
+```bash
+# Newer token-based auth
+kaggle auth login
+# -- or --
+# Legacy API key: generate one at kaggle.com/settings, then either
+# place it at ~/.kaggle/kaggle.json, or export KAGGLE_USERNAME/KAGGLE_KEY
+# in .env (see .env.example).
+```
+
+Then, from the Dagster UI (materialize `raw_transaction_kaggle_to_gcs`) or:
+
+```bash
+uv run --env-file .env dagster asset materialize \
+  -m fraud_detection.definitions --select raw_transaction_kaggle_to_gcs
+```
+
+Once that succeeds, point `raw_csv_source` at the staged file -- either
+edit `RawCsvSourceResource()` in
+[definitions.py](src/fraud_detection/definitions.py) to
+`RawCsvSourceResource(uri=RAW_DUMP_GCS_URI)` (the constant in
+[resources.py](src/fraud_detection/resources.py)), or override `uri` via
+run config for a one-off materialization -- before running
+`raw_transactions_validation` / `raw_transactions_bigquery` against it.
 
 ## Repository layout
 
