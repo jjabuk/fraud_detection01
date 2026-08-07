@@ -53,15 +53,21 @@ def raw_transaction_kaggle_to_gcs(
 
         local_path = Path(tmp_dir) / kaggle_raw_dump.file_name
         if not local_path.exists():
-            # Older Kaggle API responses have wrapped single-file downloads
-            # in a zip even when a bare file was requested -- defensive
-            # fallback, cheap to keep even though the current kagglesdk
-            # backend delivers the raw file directly.
-            zip_path = local_path.with_suffix(".zip")
-            if not zip_path.exists():
+            # Kaggle's single-file competition download wraps the file in
+            # a zip named "<original_name>.zip" (e.g.
+            # "train_transaction.csv.zip", full name + ".zip", not the
+            # extension replaced) -- confirmed against a real download,
+            # not a guess. Fall back to any lone .zip in the temp dir too,
+            # in case that naming shifts again.
+            candidates = [
+                local_path.with_name(local_path.name + ".zip"),
+                *Path(tmp_dir).glob("*.zip"),
+            ]
+            zip_path = next((c for c in candidates if c.exists()), None)
+            if zip_path is None:
                 raise Failure(
-                    f"Kaggle download did not produce {local_path} or "
-                    f"{zip_path}; contents of {tmp_dir}: "
+                    f"Kaggle download did not produce {local_path} or a "
+                    f".zip containing it; contents of {tmp_dir}: "
                     f"{sorted(p.name for p in Path(tmp_dir).iterdir())}"
                 )
             with zipfile.ZipFile(zip_path) as zf:

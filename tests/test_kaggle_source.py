@@ -55,7 +55,9 @@ def test_zip_fallback_extraction(monkeypatch):
     _mock_client, mock_blob = _patch_gcs_client(monkeypatch)
 
     def fake_download(self, competition, file_name, path=None, force=False, quiet=False):
-        zip_path = Path(path) / f"{Path(file_name).stem}.zip"
+        # Real Kaggle behavior, confirmed against a live download: the zip
+        # is "<file_name>.zip" (full name + .zip), not the extension swapped.
+        zip_path = Path(path) / f"{file_name}.zip"
         with zipfile.ZipFile(zip_path, "w") as zf:
             zf.writestr(file_name, "a,b\n1,2\n")
 
