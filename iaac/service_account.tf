@@ -55,6 +55,15 @@ resource "google_bigquery_dataset_iam_member" "mlops_dataset_roles" {
   member     = "serviceAccount:${google_service_account.mlops.email}"
 }
 
+// Read-only: ingestion's load_table_from_uri path (src/fraud_detection/
+// assets/ingestion.py) only ever needs to read the staged raw CSV out of
+// google_storage_bucket.raw_data, never write to it.
+resource "google_storage_bucket_iam_member" "mlops_raw_data_viewer" {
+  bucket = google_storage_bucket.raw_data.name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.mlops.email}"
+}
+
 output "mlops_service_account_email" {
   description = "Email address of the workload service account"
   value       = google_service_account.mlops.email
