@@ -61,7 +61,6 @@ def _mock_bigquery_client(monkeypatch: pytest.MonkeyPatch, *, num_rows: int = 5)
     mock_client.get_table.return_value = MagicMock(
         num_rows=num_rows, full_table_id="test-project:raw.ieee_train_transaction_raw"
     )
-    mock_client.insert_rows_json.return_value = []
     monkeypatch.setattr(resources_module.bigquery, "Client", lambda *a, **k: mock_client)
     return mock_client
 
@@ -85,11 +84,6 @@ def test_bigquery_asset_local_source_uses_load_table_from_file(monkeypatch):
     assert job_config.write_disposition == bigquery.WriteDisposition.WRITE_TRUNCATE
 
     assert result.metadata["rows_in_table"] == 5
-    mock_client.create_table.assert_called_once()
-    mock_client.insert_rows_json.assert_called_once()
-    (_, rows), _ = mock_client.insert_rows_json.call_args
-    assert rows[0]["num_rows"] == 5
-    assert rows[0]["source_uri"] == "data/raw/train_transaction_sample.csv"
 
 
 def test_bigquery_asset_gcs_source_without_pinned_schema_raises(monkeypatch, tmp_path):
@@ -136,16 +130,3 @@ def test_bigquery_asset_gcs_source_with_pinned_schema_uses_load_table_from_uri(
     mock_client.schema_from_json.assert_called_once_with(str(schema_path))
 
     assert result.metadata["rows_in_table"] == 590_540
-
-
-def test_bigquery_asset_logs_but_does_not_fail_on_audit_row_error(monkeypatch, caplog):
-    mock_client = _mock_bigquery_client(monkeypatch)
-    mock_client.insert_rows_json.return_value = [{"index": 0, "errors": ["boom"]}]
-    context = build_asset_context()
-
-    # Should not raise despite the audit insert reporting an error.
-    raw_transactions_bigquery(
-        context,
-        raw_csv_source=RawCsvSourceResource(),
-        bigquery_resource=BigQueryResource(project="test-project"),
-    )

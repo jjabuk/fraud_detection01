@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 from google.cloud import bigquery, storage
 
-from dagster import AssetExecutionContext, Failure, MaterializeResult, asset
+from dagster import Failure, MaterializeResult, asset
 from fraud_detection.resources import (
     BQ_SCHEMA_PATH,
     BigQueryResource,
@@ -19,14 +18,6 @@ FRAUD_LABEL_COLUMN = "isFraud"
 VALIDATION_CHUNK_SIZE = 100_000
 
 RAW_TABLE = "ieee_train_transaction_raw"
-INGESTION_RUNS_TABLE = "ingestion_runs"
-INGESTION_RUNS_SCHEMA = [
-    bigquery.SchemaField("dagster_run_id", "STRING"),
-    bigquery.SchemaField("source_uri", "STRING"),
-    bigquery.SchemaField("loaded_at", "TIMESTAMP"),
-    bigquery.SchemaField("num_rows", "INT64"),
-    bigquery.SchemaField("write_disposition", "STRING"),
-]
 
 
 def _open_source(uri: str, project: str):
@@ -155,16 +146,6 @@ def raw_transactions_bigquery(
     load_job.result(timeout=1800)
     table = client.get_table(table_id)
 
-    _record_ingestion_run(
-        client,
-        context=context,
-        project=bigquery_resource.project,
-        dagster_run_id=context.run_id,
-        source_uri=raw_csv_source.uri,
-        num_rows=table.num_rows,
-        write_disposition=str(job_config.write_disposition),
-    )
-
     context.log.info("Loaded %s rows into %s.", table.num_rows, table_id)
     return MaterializeResult(
         metadata={
@@ -173,42 +154,3 @@ def raw_transactions_bigquery(
             "write_disposition": str(job_config.write_disposition),
         }
     )
-
-
-def _record_ingestion_run(
-    client: bigquery.Client,
-    *,
-    context: AssetExecutionContext,
-    project: str,
-    dagster_run_id: str,
-    source_uri: str,
-    num_rows: int,
-    write_disposition: str,
-) -> None:
-    """Appends one audit row per load. WRITE_TRUNCATE on the main table
-    erases *when* a load happened by design -- this table is where that
-    traceability actually lives, without touching the main table's
-    truncate-and-replace semantics.
-
-    A failure here is logged, not raised: the main table load already
-    succeeded by the time this runs, and losing one audit row shouldn't
-    fail an otherwise-successful ingestion.
-    """
-    table_id = f"{project}.raw.{INGESTION_RUNS_TABLE}"
-    client.create_table(
-        bigquery.Table(table_id, schema=INGESTION_RUNS_SCHEMA), exists_ok=True
-    )
-    errors = client.insert_rows_json(
-        table_id,
-        [
-            {
-                "dagster_run_id": dagster_run_id,
-                "source_uri": source_uri,
-                "loaded_at": datetime.now(UTC).isoformat(),
-                "num_rows": num_rows,
-                "write_disposition": write_disposition,
-            }
-        ],
-    )
-    if errors:
-        context.log.warning("Failed to write ingestion_runs audit row: %s", errors)
