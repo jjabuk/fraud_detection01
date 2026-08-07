@@ -8,7 +8,6 @@ import pandas as pd
 from google.cloud import bigquery, storage
 
 from dagster import AssetExecutionContext, Failure, MaterializeResult, asset
-
 from fraud_detection.resources import BigQueryResource, RawCsvSourceResource
 
 REQUIRED_COLUMNS = ["TransactionID", "TransactionDT", "TransactionAmt"]
@@ -49,7 +48,7 @@ def _open_source(uri: str):
 
 @asset(group_name="ingestion")
 def raw_transactions_validation(
-    context: AssetExecutionContext,
+    context,
     raw_csv_source: RawCsvSourceResource,
 ) -> MaterializeResult:
     """Validates the raw CSV before anything gets loaded to BigQuery.
@@ -101,7 +100,7 @@ def raw_transactions_validation(
 
 @asset(group_name="ingestion", deps=[raw_transactions_validation])
 def raw_transactions_bigquery(
-    context: AssetExecutionContext,
+    context,
     raw_csv_source: RawCsvSourceResource,
     bigquery_resource: BigQueryResource,
 ) -> MaterializeResult:

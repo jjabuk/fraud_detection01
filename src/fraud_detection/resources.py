@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import os
 
-from dagster import ConfigurableResource
 from google.cloud import bigquery
+
+from dagster import ConfigurableResource
 
 
 class RawCsvSourceResource(ConfigurableResource):
