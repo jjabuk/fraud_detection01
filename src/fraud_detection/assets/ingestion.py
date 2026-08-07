@@ -8,17 +8,15 @@ import pandas as pd
 from google.cloud import bigquery, storage
 
 from dagster import AssetExecutionContext, Failure, MaterializeResult, asset
-from fraud_detection.resources import BigQueryResource, RawCsvSourceResource
+from fraud_detection.resources import (
+    BQ_SCHEMA_PATH,
+    BigQueryResource,
+    RawCsvSourceResource,
+)
 
 REQUIRED_COLUMNS = ["TransactionID", "TransactionDT", "TransactionAmt"]
 FRAUD_LABEL_COLUMN = "isFraud"
 VALIDATION_CHUNK_SIZE = 100_000
-
-# Generated once via the schema-regeneration runbook in README.md (bq load
-# --autodetect into a throwaway sandbox table, hand-audit the columns
-# autodetect gets wrong, commit the result). Only consulted for the gs://
-# (production) load path -- see raw_transactions_bigquery below.
-BQ_SCHEMA_PATH = Path(__file__).parent.parent / "schemas" / "train_transaction_bq_schema.json"
 
 RAW_TABLE = "ieee_train_transaction_raw"
 INGESTION_RUNS_TABLE = "ingestion_runs"
@@ -129,8 +127,8 @@ def raw_transactions_bigquery(
         if not BQ_SCHEMA_PATH.exists():
             raise Failure(
                 f"Pinned BigQuery schema not found at {BQ_SCHEMA_PATH}. "
-                "Generate it once via the schema-regeneration runbook in "
-                "README.md before loading from a gs:// source."
+                "Materialize raw_transaction_bq_schema once before loading "
+                "from a gs:// source."
             )
         job_config = bigquery.LoadJobConfig(
             source_format=bigquery.SourceFormat.CSV,
